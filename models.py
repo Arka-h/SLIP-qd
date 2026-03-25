@@ -254,7 +254,7 @@ def get_metric_names(model):
         return ['loss', 'ssl_loss', 'ssl_acc']
 
 
-@timm.models.registry.register_model
+@timm.models.register_model
 def vit_small_mocov3_patch16_224(**kwargs):
     model_kwargs = dict(patch_size=16, embed_dim=384, depth=12, num_heads=12, **kwargs)
     model = timm.models.vision_transformer._create_vision_transformer('vit_small_patch16_224', **model_kwargs)
@@ -302,6 +302,42 @@ def SIMCLR_VITB16(**kwargs):
 
 def SLIP_VITB16(**kwargs):
     vision_model = timm.create_model('vit_base_patch16_224', num_classes=0)
+    model = SLIP(embed_dim=512, vision_width=768, vision_model=vision_model, context_length=77, vocab_size=49408,
+        transformer_width=512, transformer_heads=8, transformer_layers=12, **kwargs)
+
+    return model
+
+"""
+vision_width: 768
+vision_layers: 12
+vision_patch_size: 32
+grid_size: 7
+image_resolution: 224
+embed_dim: 512
+context_length: 77
+vocab_size: 49408
+transformer_width: 512
+transformer_heads: 8
+transformer_layers: 12
+"""
+
+def CLIP_VITB32(**kwargs):
+    vision_model = timm.create_model('vit_base_patch32_224.augreg_in21k_ft_in1k', pretrained=True, num_classes=0)
+    model = CLIP(embed_dim=512, vision_width=768, vision_model=vision_model, context_length=77, vocab_size=49408,
+        transformer_width=512, transformer_heads=8, transformer_layers=12, **kwargs)
+
+    return model
+
+
+def SIMCLR_VITB32(**kwargs):
+    vision_model = timm.create_model('vit_base_patch32_224.augreg_in21k_ft_in1k', pretrained=True, num_classes=0)
+    model = SIMCLR(vision_width=768, vision_model=vision_model, **kwargs)
+
+    return model
+
+
+def SLIP_VITB32(**kwargs):
+    vision_model = timm.create_model('vit_base_patch32_224.augreg_in21k_ft_in1k', pretrained=True, num_classes=0)
     model = SLIP(embed_dim=512, vision_width=768, vision_model=vision_model, context_length=77, vocab_size=49408,
         transformer_width=512, transformer_heads=8, transformer_layers=12, **kwargs)
 

@@ -8,13 +8,13 @@ from collections import OrderedDict
 import json
 import math
 import os
+import pdb
 import sys
 import time
 import wandb
 
 import numpy as np
 import torch
-import torch.cuda.amp as amp
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -28,19 +28,20 @@ import datasets
 import models
 from tokenizer import SimpleTokenizer
 import utils
+from peft import LoraConfig, get_peft_model
 
 
 def get_args_parser():
     parser = argparse.ArgumentParser(description='SLIP training and evaluation', add_help=False)
     # Data
-    parser.add_argument('--dataset', default='yfcc15m', type=str, choices=['yfcc15m', 'cc3m', 'cc12m', 'coco', 'redcaps'])
-    parser.add_argument('--root', default='', type=str,
+    parser.add_argument('--dataset', default='yfcc15m', type=str, choices=['yfcc15m', 'cc3m', 'cc12m', 'coco', 'redcaps', 'quickdraw'])
+    parser.add_argument('--root', default='/home/rahul/data/quickdraw/sketchrnn', type=str,
                         help='path to dataset root')
     parser.add_argument('--metadata', default='yfcc15m.pkl', type=str,
                         help='path to metadata file (see README for details)')
     parser.add_argument('--output-dir', default='./', type=str, help='output dir')
     # Model
-    parser.add_argument('--model', default='SLIP_VITB16', type=str)
+    parser.add_argument('--model', default='SLIP_VITB32', type=str)
     parser.add_argument('--ssl-mlp-dim', default=4096, type=int,
                         help='hidden dim of SimCLR mlp projection head')
     parser.add_argument('--ssl-emb-dim', default=256, type=int,
@@ -50,6 +51,15 @@ def get_args_parser():
     parser.add_argument('--ssl-temp', default=0.1, type=float,
                         help='softmax temperature for SimCLR objective')
     parser.add_argument('--resume', default='', type=str, help='path to resume from')
+    # LoRA
+    parser.add_argument('--use-lora', action='store_true',
+                        help='Apply PEFT LoRA to the visual encoder (recommended for VITB32 fine-tuning)')
+    parser.add_argument('--lora-rank', default=16, type=int, help='LoRA rank r')
+    parser.add_argument('--lora-alpha', default=16, type=int, help='LoRA alpha scaling factor')
+    parser.add_argument('--lora-dropout', default=0.0, type=float, help='LoRA dropout probability')
+    # QuickDraw
+    parser.add_argument('--qd-eval-split', default='valid', choices=['valid', 'test'],
+                        help='SketchRNN split to use for QuickDraw zero-shot eval')
     # Training
     parser.add_argument('--epochs', default=25, type=int)
     parser.add_argument('--warmup-epochs', default=1, type=int)
@@ -69,6 +79,8 @@ def get_args_parser():
     parser.add_argument('--eval-freq', default=1, type=int)
     parser.add_argument('--disable-amp', action='store_true',
                         help='disable mixed-precision training (requires more memory and compute)')
+    parser.add_argument('--train-scheme', default='o', type=str, choices=['o', 'c'], 
+                        help='open/closed evaluation scheme')
     # System
     parser.add_argument('--print-freq', default=10, type=int, help='print frequency')
     parser.add_argument('-j', '--workers', default=10, type=int, metavar='N',
@@ -105,6 +117,24 @@ def main(args):
     model = getattr(models, args.model)(ssl_mlp_dim=args.ssl_mlp_dim, ssl_emb_dim=args.ssl_emb_dim)
     model.cuda(args.gpu)
 
+    # Optionally apply PEFT LoRA to the visual encoder
+    # target_modules=["qkv", "proj"] matches timm ViT attention layers:
+    #   blocks.N.attn.qkv  — Linear(768, 2304) fused Q/K/V
+    #   blocks.N.attn.proj — Linear(768, 768)  output projection
+    # Base visual weights are frozen; only LoRA adapters are trainable.
+    # image_projection, text_projection, image_mlp, transformer remain trainable.
+    if args.use_lora:
+        lora_config = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            target_modules=["qkv", "proj", "fc1", "fc2"],
+            lora_dropout=args.lora_dropout,
+            bias="none",
+        )
+        model.visual = get_peft_model(model.visual, lora_config)
+        print("=> LoRA applied to visual encoder")
+        # model.visual.print_trainable_parameters()
+
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], bucket_cap_mb=200)
 
@@ -125,7 +155,7 @@ def main(args):
 
     optimizer = torch.optim.AdamW(optim_params, lr=args.lr, betas=args.betas,
                                     eps=args.eps, weight_decay=args.wd)
-    scaler = amp.GradScaler(enabled=not args.disable_amp)
+    scaler = torch.amp.GradScaler('cuda', enabled=not args.disable_amp)
 
     # optionally resume from a checkpoint (takes precedence over autoresume)
     if args.resume:
@@ -162,8 +192,14 @@ def main(args):
     # Data loading code
     print("=> creating dataset")
     tokenizer = SimpleTokenizer()
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    # vit_base_patch32_224.augreg_in21k_ft_in1k uses (0.5, 0.5, 0.5) normalization;
+    # all other models use standard ImageNet stats.
+    if 'VITB32' in args.model:
+        normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                         std=[0.5, 0.5, 0.5])
+    else:
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
     train_transform = transforms.Compose([
             transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),
             transforms.ToTensor(),
@@ -176,11 +212,27 @@ def main(args):
             normalize
         ])
 
-    train_dataset = datasets.get_dataset(train_transform, tokenizer, args)
+    train_dataset = datasets.get_dataset(train_transform, tokenizer, args, normalize=normalize)
     cwd = os.path.dirname(os.path.realpath(__file__))
-    with open(os.path.join(cwd, 'dataset_catalog.json')) as f:
-        root = json.load(f)['imagenet']['path']
-    val_dataset = ImageFolder(os.path.join(root, 'val'), val_transform)
+
+    # Build validation dataset: QuickDraw zero-shot eval on 14 held-out classes,
+    # or standard ImageNet for all other datasets.
+    if args.dataset == 'quickdraw':
+        qd_split = 'test' if args.evaluate else args.qd_eval_split
+        # Closed-set: eval on all training classes (holdout was seen during training).
+        # Open-set: eval zero-shot on the 14 holdout classes only.
+        qd_eval_class_names = datasets.get_sketchrnn_class_names(args.root, train_scheme='c') if args.train_scheme == 'c' \
+                                else datasets.QD_HOLDOUT_CLASSES
+        val_dataset = datasets.QD_Val(
+            root=args.root,
+            holdout_classes=qd_eval_class_names,
+            split=qd_split,
+            transform=val_transform,
+        )
+    else:
+        with open(os.path.join(cwd, 'dataset_catalog.json')) as f:
+            root = json.load(f)['imagenet']['path']
+        val_dataset = ImageFolder(os.path.join(root, 'val'), val_transform)
 
     # dist eval resamples data to pad uneven batch sizes
     # make sure num_samples = 0 mod num_gpus for exact acc
@@ -204,7 +256,11 @@ def main(args):
             print('zero-shot evaluation not supported with ssl-only model.')
             return
 
-        zero_stats = validate_zeroshot(val_loader, model, tokenizer, args)
+        if args.dataset == 'quickdraw':
+            # TODO: Check this validate function
+            zero_stats = validate_quickdraw_zeroshot(val_loader, model, tokenizer, qd_eval_class_names, args)
+        else:
+            zero_stats = validate_zeroshot(val_loader, model, tokenizer, args)
         if utils.is_main_process():
             with open(os.path.join(args.output_dir, 'eval_log.txt'), 'a') as f:
                 f.write(json.dumps(zero_stats) + '\n')
@@ -233,6 +289,9 @@ def main(args):
         if args.model.startswith('SIMCLR'):
             val_stats = {'acc1': -1}
             acc1 = -1
+        elif args.dataset == 'quickdraw':
+            val_stats = validate_quickdraw_zeroshot(val_loader, model, tokenizer, qd_eval_class_names, args)
+            acc1 = val_stats['acc1']
         else:
             val_stats = validate_zeroshot(val_loader, model, tokenizer, args)
             acc1 = val_stats['acc1']
@@ -291,7 +350,7 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
         inputs = [tensor.cuda(args.gpu, non_blocking=True) for tensor in inputs]
 
         # compute output
-        with amp.autocast(enabled=not args.disable_amp):
+        with torch.amp.autocast('cuda', enabled=not args.disable_amp):
             outputs = model(*inputs)
             loss_dict = criterion(outputs)
             loss = loss_dict['loss']
@@ -399,6 +458,66 @@ def validate_zeroshot(val_loader, model, tokenizer, args):
 
     progress.synchronize()
     print('0-shot * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
+          .format(top1=top1, top5=top5))
+    return {'acc1': top1.avg, 'acc5': top5.avg}
+
+
+def validate_quickdraw_zeroshot(val_loader, model, tokenizer, class_names, args):
+    """
+    Zero-shot classification accuracy on the 14 QuickDraw held-out classes.
+    Uses sketch-specific text templates instead of ImageNet templates.
+    class_names: list of string class names matching integer labels in val_loader.
+    """
+    batch_time = AverageMeter('Time', ':6.3f')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(val_loader),
+        [batch_time, top1, top5],
+        prefix='QD Test: ')
+
+    model.eval()
+
+    cwd = os.path.dirname(os.path.realpath(__file__))
+    with open(os.path.join(cwd, 'templates.json')) as f:
+        all_templates = json.load(f)
+    templates = all_templates.get('quickdraw', datasets.QD_TEMPLATES)
+
+    with torch.no_grad():
+        text_features = []
+        for class_name in class_names:
+            texts = [t.format(class_name) for t in templates]
+            texts = tokenizer(texts).cuda(args.gpu, non_blocking=True)
+            class_embeddings = utils.get_model(model).encode_text(texts)
+            class_embeddings = class_embeddings / class_embeddings.norm(dim=-1, keepdim=True)
+            class_embeddings = class_embeddings.mean(dim=0)
+            class_embeddings = class_embeddings / class_embeddings.norm(dim=-1, keepdim=True)
+            text_features.append(class_embeddings)
+        text_features = torch.stack(text_features, dim=0)
+
+        end = time.time()
+        for i, (images, target) in enumerate(val_loader):
+            images = images.cuda(args.gpu, non_blocking=True)
+            target = target.cuda(args.gpu, non_blocking=True)
+
+            image_features = utils.get_model(model).encode_image(images)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+            logits_per_image = image_features @ text_features.t()
+
+            acc1, acc5 = accuracy(logits_per_image, target, topk=(1, 5))
+            acc1, acc5 = utils.scaled_all_reduce([acc1, acc5])
+            top1.update(acc1.item(), images.size(0))
+            top5.update(acc5.item(), images.size(0))
+
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                progress.display(i)
+
+    progress.synchronize()
+    print('QD 0-shot * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
           .format(top1=top1, top5=top5))
     return {'acc1': top1.avg, 'acc5': top5.avg}
 

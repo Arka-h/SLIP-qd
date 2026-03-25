@@ -4121,5 +4121,21 @@
         "wrestling ring indoor",
         "yard",
         "youth hostel"
+    ],
+    "quickdraw": [
+        "bicycle",
+        "train",
+        "stop sign",
+        "dog",
+        "elephant",
+        "backpack",
+        "skateboard",
+        "knife",
+        "sandwich",
+        "pizza",
+        "couch",
+        "mouse",
+        "oven",
+        "clock"
     ]
 }

@@ -276,5 +276,12 @@
     "sun397": [
         "a photo of a {}.",
         "a photo of the {}."
+    ],
+    "quickdraw": [
+        "a drawing of a {}",
+        "a sketch of a {}",
+        "a rough sketch of {}",
+        "a doodle of a {}",
+        "a hand-drawn {}"
     ]
 }
