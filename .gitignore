@@ -1,8 +1,10 @@
+.env
 __pycache__/
 .claude/
 .vscode/
 example/
 wandb/
+output/sweep/
 todo.md
 test.py
 scratch.py

@@ -245,11 +245,13 @@ def main(args):
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True,
+        persistent_workers=args.workers > 0) # TODO: Add in clip_ddetr to reduce long term latency from worker initialization
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=(val_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=val_sampler, drop_last=False)
+        num_workers=args.workers, pin_memory=True, sampler=val_sampler, drop_last=False,
+        persistent_workers=args.workers > 0)
 
     if args.evaluate:
         if args.model.startswith('SIMCLR'):
@@ -271,6 +273,8 @@ def main(args):
 
     if utils.is_main_process() and args.wandb:
         wandb_id = os.path.split(args.output_dir)[-1]
+        
+        wandb.login(key=os.getenv('WANDB_API_KEY'))
         wandb.init(project='slip', id=wandb_id, config=args, resume='allow')
 
     print(args)

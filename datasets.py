@@ -271,45 +271,22 @@ class QuickDraw(torch.utils.data.Dataset):
         self.class_to_idx = {name: i for i, name in enumerate(class_names)}
         self.split = split
         self.transform = transform
-        self._mmap_cache = {}   # class_name -> (ptr, strokes) mmap views, per-worker
-
-        # Build flat (class_idx, sample_idx) index using a lengths cache to
-        # avoid loading full stroke arrays into memory at init time.
-        cache_path = os.path.join(root, f'_lengths_{split}.json')
-        if os.path.exists(cache_path):
-            with open(cache_path) as f:
-                lengths = json.load(f)
-        else:
-            lengths = {}
-            for class_name in class_names:
-                path = os.path.join(root, f'{class_name}.full.npz')
-                data = np.load(path, encoding='latin1', allow_pickle=True)
-                lengths[class_name] = int(len(data[split]))
-            with open(cache_path, 'w') as f:
-                json.dump(lengths, f)
-
+        # True mmap: .npy files map directly to file bytes, no zip wrapper.
+        # ptr is tiny (~560 KB/class), loaded fully. strokes is mmap'd —
+        # only touched pages are in RAM, shared across GPU processes via OS page cache.
+        self._mmap_cache = {}  # class_name -> (ptr, strokes memmap)
         self.samples = []
         for class_name in class_names:
+            ptr = np.load(os.path.join(root, f'{class_name}.{split}.ptr.npy'))
+            strokes = np.load(os.path.join(root, f'{class_name}.{split}.strokes.npy'), mmap_mode='r')
+            self._mmap_cache[class_name] = (ptr, strokes)
             class_idx = self.class_to_idx[class_name]
-            for i in range(lengths[class_name]):
+            for i in range(len(ptr) - 1):
                 self.samples.append((class_idx, i))
 
     def _load_sample(self, class_name, sample_idx):
-        """Return strokes for one sample as (T, 3) int16, using mmap when available."""
-        flat_path = os.path.join(self.root, f'{class_name}.flat.npz')
-        if os.path.exists(flat_path):
-            if class_name not in self._mmap_cache:
-                data = np.load(flat_path, mmap_mode='r')
-                self._mmap_cache[class_name] = (data[f'{self.split}_ptr'],
-                                                data[f'{self.split}_strokes'])
-            ptr, strokes = self._mmap_cache[class_name]
-            return strokes[ptr[sample_idx]:ptr[sample_idx + 1]]
-        # fallback: old pickle-based format
-        data = np.load(
-            os.path.join(self.root, f'{class_name}.full.npz'),
-            encoding='latin1', allow_pickle=True,
-        )
-        return data[self.split][sample_idx]
+        ptr, strokes = self._mmap_cache[class_name]
+        return strokes[ptr[sample_idx]:ptr[sample_idx + 1]]
 
     def get_pil_image(self, class_idx, sample_idx):
         class_name = self.class_names[class_idx]

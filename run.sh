@@ -17,6 +17,11 @@ echo "job: $SLURM_JOB_NAME"
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate clip_ddetr
 
+# Job execution commands
+. ./.env
+echo $DATASET_ROOT
+echo $SLURM_JOBID
+
 # 1) Find a free port by binding to port 0
 export MASTER_PORT=$(python - <<'EOF'
 import socket
@@ -41,15 +46,17 @@ python -u -m torch.distributed.run \
     main.py \
   --model "SLIP_VITB32" \
   --dataset "quickdraw" \
-  --root "/mnt/1tb/data/quickdraw/sketchrnn" \
+  --root $DATASET_ROOT \
   --print-freq 10 \
   --workers 3 \
   --use-lora \
   --lora-rank 16 \
   --lora-alpha 16 \
   --epochs 25 \
-  --batch-size 1024 \
+  --batch-size 512 \
+  --update-freq 2 \
   --lr 3e-4 \
   --output-dir "./output/slip_vitb32_qd14_lora" \
   --wandb
 # keep bs>2
+# update-freq does gradient accumulation, so effective batch size = batch-size * update-freq

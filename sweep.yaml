@@ -1,0 +1,26 @@
+program: main.py
+method: random
+metric:
+  name: val/acc1
+  goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 2          # stop bad runs after 2 epochs
+  eta: 2
+run_cap: 12            # 12 runs total on a single GPU
+
+parameters:
+  lr:
+    values: [1e-4, 3e-4, 1e-3]
+  lora_rank:
+    values: [4, 8, 16, 32]
+  ssl_scale:
+    values: [0.25, 0.5, 1.0]
+  ssl_temp:
+    values: [0.05, 0.1, 0.2]
+  # lora_alpha is set equal to lora_rank inside sweep_run.sh
+
+command:
+  - bash
+  - sweep_run.sh
+  - ${args}
