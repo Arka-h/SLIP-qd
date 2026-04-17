@@ -4,8 +4,9 @@ __pycache__/
 .vscode/
 example/
 wandb/
-output/sweep/
+output/
 todo.md
 test.py
 scratch.py
 suggestions.py
+extra_dep.txt

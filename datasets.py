@@ -274,15 +274,22 @@ class QuickDraw(torch.utils.data.Dataset):
         # True mmap: .npy files map directly to file bytes, no zip wrapper.
         # ptr is tiny (~560 KB/class), loaded fully. strokes is mmap'd —
         # only touched pages are in RAM, shared across GPU processes via OS page cache.
+        # samples is a numpy (N,2) int32 array instead of a Python list of tuples.
+        # Python tuples trigger refcount CoW on fork: 44M tuples × 3 workers = ~12 GB wasted.
+        # numpy array pages are read-only after init, so workers share them without CoW.
         self._mmap_cache = {}  # class_name -> (ptr, strokes memmap)
-        self.samples = []
+        class_cols, sample_cols = [], []
         for class_name in class_names:
             ptr = np.load(os.path.join(root, f'{class_name}.{split}.ptr.npy'))
             strokes = np.load(os.path.join(root, f'{class_name}.{split}.strokes.npy'), mmap_mode='r')
             self._mmap_cache[class_name] = (ptr, strokes)
             class_idx = self.class_to_idx[class_name]
-            for i in range(len(ptr) - 1):
-                self.samples.append((class_idx, i))
+            n = len(ptr) - 1
+            class_cols.append(np.full(n, class_idx, dtype=np.int32))
+            sample_cols.append(np.arange(n, dtype=np.int32))
+        self.samples = np.stack(
+            [np.concatenate(class_cols), np.concatenate(sample_cols)], axis=1
+        )
 
     def _load_sample(self, class_name, sample_idx):
         ptr, strokes = self._mmap_cache[class_name]

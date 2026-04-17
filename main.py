@@ -81,6 +81,9 @@ def get_args_parser():
                         help='disable mixed-precision training (requires more memory and compute)')
     parser.add_argument('--train-scheme', default='o', type=str, choices=['o', 'c'], 
                         help='open/closed evaluation scheme')
+    # Profiler
+    parser.add_argument('--profile', action='store_true',
+                        help='Run torch.profiler for the first ~10 batches and print a timing table')
     # System
     parser.add_argument('--print-freq', default=10, type=int, help='print frequency')
     parser.add_argument('-j', '--workers', default=10, type=int, metavar='N',
@@ -246,12 +249,14 @@ def main(args):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True,
-        persistent_workers=args.workers > 0) # TODO: Add in clip_ddetr to reduce long term latency from worker initialization
+        persistent_workers=args.workers > 0,
+        prefetch_factor=2 if args.workers > 0 else None)
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=(val_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=val_sampler, drop_last=False,
-        persistent_workers=args.workers > 0)
+        persistent_workers=args.workers > 0,
+        prefetch_factor=2 if args.workers > 0 else None)
 
     if args.evaluate:
         if args.model.startswith('SIMCLR'):
@@ -272,10 +277,9 @@ def main(args):
         len(train_loader) // args.update_freq, warmup_epochs=args.warmup_epochs, start_warmup_value=args.lr_start)
 
     if utils.is_main_process() and args.wandb:
-        wandb_id = os.path.split(args.output_dir)[-1]
-        
+        wandb_name = os.path.split(args.output_dir)[-1]
         wandb.login(key=os.getenv('WANDB_API_KEY'))
-        wandb.init(project='slip', id=wandb_id, config=args, resume='allow')
+        wandb.init(project='slip', name=wandb_name, config=args, resume='allow')
 
     print(args)
 
@@ -339,6 +343,21 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
     # switch to train mode
     model.train()
 
+    # ── optional profiler: first epoch only, covers wait+warmup+active steps ──
+    _PROF_WAIT, _PROF_WARMUP, _PROF_ACTIVE = 1, 1, 5  # total = 7 iters
+    prof = None
+    if getattr(args, 'profile', False) and epoch == args.start_epoch:
+        prof = torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU,
+                        torch.profiler.ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(
+                wait=_PROF_WAIT, warmup=_PROF_WARMUP, active=_PROF_ACTIVE),
+            record_shapes=True,
+            with_stack=False,
+        )
+        prof.start()
+        print("=> profiler started (7 warm-up + active steps)")
+
     end = time.time()
     for data_iter, inputs in enumerate(train_loader):
         optim_iter = data_iter // args.update_freq
@@ -396,6 +415,18 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
                         'scaler': scaler.get_scale(),
                         'logit': logit_scale})
             progress.display(optim_iter)
+
+        if prof is not None:
+            prof.step()
+            if data_iter >= _PROF_WAIT + _PROF_WARMUP + _PROF_ACTIVE - 1:
+                prof.stop()
+                trace_path = os.path.join(args.output_dir, 'profiler_trace.json')
+                prof.export_chrome_trace(trace_path)
+                print("\n" + prof.key_averages().table(
+                    sort_by='cuda_time_total', row_limit=20))
+                print(f"=> profiler trace saved to {trace_path}")
+                print("   open in chrome://tracing or https://ui.perfetto.dev")
+                prof = None
 
     progress.synchronize()
     return {**{k: v.avg for k, v in metrics.items()},

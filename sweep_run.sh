@@ -36,6 +36,7 @@ for arg in "$@"; do
     fi
 done
 
+trap '' INT
 python -u -m torch.distributed.run \
     --nproc_per_node=1 \
     --master_port $MASTER_PORT \
