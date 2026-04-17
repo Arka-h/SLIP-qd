@@ -3,7 +3,7 @@
 #SBATCH --output=output/slip_qd_1_%j.log        # Standard output log (%j = job ID)
 #SBATCH --error=output/slip_qd_1_%j.err         # Standard error log
 #SBATCH --time=2-00:00:00                     # Time limit (dd-hh:mm:ss)
-#SBATCH --ntasks=2                            # Number of tasks (typically 1 for single-node jobs
+#SBATCH --ntasks=1                            # 1 task — torchrun spawns one process per GPU
 #SBATCH --cpus-per-task=8                     # Number of CPUs per task
 #SBATCH --mem=48GB                            # Memory allocation
 #SBATCH --partition=ada                       # Partition (long/queue)
