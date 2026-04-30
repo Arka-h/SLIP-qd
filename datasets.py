@@ -278,13 +278,25 @@ class QuickDraw(torch.utils.data.Dataset):
         # Python tuples trigger refcount CoW on fork: 44M tuples × 3 workers = ~12 GB wasted.
         # numpy array pages are read-only after init, so workers share them without CoW.
         self._mmap_cache = {}  # class_name -> (ptr, strokes memmap)
-        class_cols, sample_cols = [], []
-        for class_name in class_names:
+
+        # Load all classes in parallel — critical on NFS where 345 sequential file
+        # opens (each a network round-trip) cause 10-20 min startup delays.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _load_class(args):
+            class_name, class_idx = args
             ptr = np.load(os.path.join(root, f'{class_name}.{split}.ptr.npy'))
             strokes = np.load(os.path.join(root, f'{class_name}.{split}.strokes.npy'), mmap_mode='r')
-            self._mmap_cache[class_name] = (ptr, strokes)
-            class_idx = self.class_to_idx[class_name]
             n = len(ptr) - 1
+            return class_name, class_idx, ptr, strokes, n
+
+        with ThreadPoolExecutor(max_workers=32) as ex:
+            results = list(ex.map(_load_class,
+                                  [(n, self.class_to_idx[n]) for n in class_names]))
+
+        class_cols, sample_cols = [], []
+        for class_name, class_idx, ptr, strokes, n in results:
+            self._mmap_cache[class_name] = (ptr, strokes)
             class_cols.append(np.full(n, class_idx, dtype=np.int32))
             sample_cols.append(np.arange(n, dtype=np.int32))
         self.samples = np.stack(

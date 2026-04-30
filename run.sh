@@ -1,21 +1,22 @@
 #!/bin/bash
-#SBATCH --job-name=slip_qd_1                    # Job name
-#SBATCH --output=output/slip_qd_1_%j.log        # Standard output log (%j = job ID)
-#SBATCH --error=output/slip_qd_1_%j.err         # Standard error log
+#SBATCH --job-name=slip_qd_ep10_1                    # Job name
+#SBATCH --output=output/slip_qd_ep10_1_%j.log        # Standard output log (%j = job ID)
+#SBATCH --error=output/slip_qd_ep10_1_%j.err         # Standard error log
 #SBATCH --time=2-00:00:00                     # Time limit (dd-hh:mm:ss)
-#SBATCH --ntasks=1                            # 1 task — torchrun spawns one process per GPU
-#SBATCH --cpus-per-task=8                     # Number of CPUs per task
-#SBATCH --mem=48GB                            # Memory allocation
+#SBATCH --ntasks=1                            # 2 task — torchrun spawns one process per GPU
+#SBATCH --cpus-per-task=16                     # Number of CPUs per task
+#SBATCH --mem=96GB                            # 48GB model+workers + 24GB local dataset copy
 #SBATCH --partition=ada                       # Partition (long/queue)
 #SBATCH --gres=gpu:ADA6000:2                  # GPU allocation (if needed, modify accordingly)
 #SBATCH --account=research
-# #SBATCH --nodelist=cn8                        # Node to run on (modify as needed)
+#SBATCH --nodelist=cn7                        # Node to run on (modify as needed)
 # =============================================================
 
 echo "job: $SLURM_JOB_NAME"
 # >>> Conda setup <<<
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate clip_ddetr
+trap 'echo "=> cleaning up $LOCAL_DATA"; rm -rf "$LOCAL_DATA"' EXIT
 
 # Job execution commands
 . ./.env
@@ -32,12 +33,21 @@ s.close()
 print(port)
 EOF
 )
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+unset PYTORCH_CUDA_ALLOC_CONF
 export SLURM_NNODES=${SLURM_NNODES:-1}                                                                                                                                                                                                                       
 export SLURM_GPUS_ON_NODE=${SLURM_GPUS_ON_NODE:-1}
 echo "nnodes: $SLURM_NNODES"
 echo "nproc_per_node: $SLURM_GPUS_ON_NODE"
 echo "master port: $MASTER_PORT"
+
+LOCAL_DATA=/tmp/quickdraw_$SLURM_JOBID
+if [ ! -d "$LOCAL_DATA" ]; then
+    echo "=> copying dataset to local disk ($LOCAL_DATA)..."
+    mkdir -p "$LOCAL_DATA"
+    rsync -a "$DATASET_ROOT"/ "$LOCAL_DATA"/
+    echo "=> done: $(du -sh $LOCAL_DATA | cut -f1)"
+fi
 
 python -u -m torch.distributed.run \
     --nnodes=$SLURM_NNODES \
@@ -46,9 +56,9 @@ python -u -m torch.distributed.run \
     main.py \
   --model "SLIP_VITB32" \
   --dataset "quickdraw" \
-  --root $DATASET_ROOT \
+  --root "$LOCAL_DATA" \
   --print-freq 100 \
-  --workers 2 \
+  --workers 6 \
   --use-lora \
   --lora-rank 16 \
   --lora-alpha 16 \
