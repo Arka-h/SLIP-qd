@@ -41,6 +41,7 @@ echo "nnodes: $SLURM_NNODES"
 echo "nproc_per_node: $SLURM_GPUS_ON_NODE"
 echo "master port: $MASTER_PORT"
 
+LOCAL_DATA="$DATASET_ROOT"
 # LOCAL_DATA=/tmp/quickdraw_$SLURM_JOBID
 # if [ ! -d "$LOCAL_DATA" ]; then
 #     echo "=> copying dataset to local disk ($LOCAL_DATA)..."
