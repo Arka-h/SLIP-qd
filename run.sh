@@ -16,7 +16,7 @@ echo "job: $SLURM_JOB_NAME"
 # >>> Conda setup <<<
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate clip_ddetr
-trap 'echo "=> cleaning up $LOCAL_DATA"; rm -rf "$LOCAL_DATA"' EXIT
+trap 'echo "=> cleaning up $LOCAL_DATA"; rm -rf "$LOCAL_DATA" 2>/dev/null || true' EXIT
 
 # Job execution commands
 . ./.env
@@ -45,7 +45,8 @@ LOCAL_DATA=/tmp/quickdraw_$SLURM_JOBID
 if [ ! -d "$LOCAL_DATA" ]; then
     echo "=> copying dataset to local disk ($LOCAL_DATA)..."
     mkdir -p "$LOCAL_DATA"
-    rsync -a "$DATASET_ROOT"/ "$LOCAL_DATA"/
+    rsync -av --include="*.ptr.npy" --include="*.strokes.npy" --exclude="*" "$DATASET_ROOT"/ "$LOCAL_DATA"/ \
+        || { echo "rsync failed (exit $?), falling back to NFS path"; LOCAL_DATA="$DATASET_ROOT"; }
     echo "=> done: $(du -sh $LOCAL_DATA | cut -f1)"
 fi
 
