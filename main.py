@@ -367,7 +367,7 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
         data_time.update(time.time() - end)
 
         # update weight decay and learning rate according to their schedule
-        it = iters_per_epoch * epoch + optim_iter  # global training iteration
+        it = min(iters_per_epoch * epoch + optim_iter, len(lr_schedule) - 1)
         for k, param_group in enumerate(optimizer.param_groups):
             param_group['lr'] = lr_schedule[it]
 
@@ -421,6 +421,7 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
             prof.step()
             if data_iter >= _PROF_WAIT + _PROF_WARMUP + _PROF_ACTIVE - 1:
                 prof.stop()
+                os.makedirs(args.output_dir, exist_ok=True)
                 trace_path = os.path.join(args.output_dir, 'profiler_trace.json')
                 prof.export_chrome_trace(trace_path)
                 print("\n" + prof.key_averages().table(

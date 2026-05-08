@@ -52,6 +52,7 @@ LOCAL_DATA="$DATASET_ROOT"
 # fi
 
 export WANDB_DIR=/tmp
+export WANDB_START_METHOD=thread
 
 python -u -m torch.distributed.run \
     --nnodes=$SLURM_NNODES \
