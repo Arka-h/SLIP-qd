@@ -419,7 +419,7 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
 
         if prof is not None:
             prof.step()
-            if data_iter >= _PROF_WAIT + _PROF_WARMUP + _PROF_ACTIVE - 1:
+            if optim_iter >= _PROF_WAIT + _PROF_WARMUP + _PROF_ACTIVE:
                 prof.stop()
                 os.makedirs(args.output_dir, exist_ok=True)
                 trace_path = os.path.join(args.output_dir, 'profiler_trace.json')

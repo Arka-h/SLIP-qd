@@ -9,9 +9,10 @@
 #SBATCH --partition=ada                       # Partition (long/queue)
 #SBATCH --gres=gpu:ADA6000:2                  # GPU allocation (if needed, modify accordingly)
 #SBATCH --account=research
-#SBATCH --nodelist=cn7                        # Node to run on (modify as needed)
+# #SBATCH --nodelist=cn7                        # Node to run on (modify as needed)
 # =============================================================
 
+mkdir -p output
 echo "job: $SLURM_JOB_NAME"
 # >>> Conda setup <<<
 source ~/miniconda3/etc/profile.d/conda.sh
