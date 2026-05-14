@@ -1,15 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=slip_qd_ep10_1                    # Job name
-#SBATCH --output=output/slip_qd_ep10_1_%j.log        # Standard output log (%j = job ID)
-#SBATCH --error=output/slip_qd_ep10_1_%j.err         # Standard error log
-#SBATCH --time=2-00:00:00                     # Time limit (dd-hh:mm:ss)
-#SBATCH --ntasks=1                            # 2 task — torchrun spawns one process per GPU
-#SBATCH --cpus-per-task=16                     # Number of CPUs per task
-#SBATCH --mem=96GB                            # 48GB model+workers + 24GB local dataset copy
-#SBATCH --partition=ada                       # Partition (long/queue)
-#SBATCH --gres=gpu:ADA6000:2                  # GPU allocation (if needed, modify accordingly)
+#SBATCH --job-name=slip_qd_ep10_1                # Job name
+#SBATCH --output=output/slip_qd_ep10_1_%j.log    # Standard output log (%j = job ID)
+#SBATCH --error=output/slip_qd_ep10_1_%j.err     # Standard error log
+#SBATCH --time=2-00:00:00                        # Time limit (dd-hh:mm:ss)
+#SBATCH --ntasks=1                               # 2 task — torchrun spawns one process per GPU
+#SBATCH --cpus-per-task=16                       # Number of CPUs per task
+#SBATCH --mem=96GB                               # 48GB model+workers + 24GB local dataset copy
+#SBATCH --partition=ada                          # Partition (long/queue)
+#SBATCH --gres=gpu:ADA6000:2                     # GPU allocation (if needed, modify accordingly)
 #SBATCH --account=research
-# #SBATCH --nodelist=cn7                        # Node to run on (modify as needed)
+# #SBATCH --nodelist=cn7                         # Node to run on (modify as needed)
 # =============================================================
 
 mkdir -p output
@@ -42,15 +42,13 @@ echo "nnodes: $SLURM_NNODES"
 echo "nproc_per_node: $SLURM_GPUS_ON_NODE"
 echo "master port: $MASTER_PORT"
 
-LOCAL_DATA="$DATASET_ROOT"
-# LOCAL_DATA=/tmp/quickdraw_$SLURM_JOBID
-# if [ ! -d "$LOCAL_DATA" ]; then
-#     echo "=> copying dataset to local disk ($LOCAL_DATA)..."
-#     mkdir -p "$LOCAL_DATA"
-#     rsync -av --include="*.ptr.npy" --include="*.strokes.npy" --exclude="*" "$DATASET_ROOT"/ "$LOCAL_DATA"/ \
-#         || { echo "rsync failed (exit $?), falling back to NFS path"; LOCAL_DATA="$DATASET_ROOT"; }
-#     echo "=> done: $(du -sh $LOCAL_DATA | cut -f1)"
-# fi
+LOCAL_DATA=/tmp/quickdraw_$SLURM_JOBID
+echo "=> copying dataset to local disk ($LOCAL_DATA)..."
+mkdir -p "$LOCAL_DATA"
+rsync -a --include="*.ptr.npy" --include="*.strokes.npy" --exclude="*" "$DATASET_ROOT"/ "$LOCAL_DATA"/ \
+    || { echo "rsync failed (exit $?), falling back to NFS path"; LOCAL_DATA="$DATASET_ROOT"; }
+echo "=> done: $(du -sh "$LOCAL_DATA" | cut -f1)"
+trap 'rm -rf "$LOCAL_DATA" 2>/dev/null || true' EXIT
 
 export WANDB_DIR=/tmp
 export WANDB_START_METHOD=thread

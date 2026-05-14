@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 import argparse
+import contextlib
 from collections import OrderedDict
 import json
 import math
@@ -374,7 +375,9 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
         inputs = [tensor.cuda(args.gpu, non_blocking=True) for tensor in inputs]
 
         # compute output
-        with torch.amp.autocast('cuda', enabled=not args.disable_amp):
+        is_last_accum = (data_iter + 1) % args.update_freq == 0
+        sync_ctx = contextlib.nullcontext() if is_last_accum else model.no_sync()
+        with sync_ctx, torch.amp.autocast('cuda', enabled=not args.disable_amp):
             outputs = model(*inputs)
             loss_dict = criterion(outputs)
             loss = loss_dict['loss']
@@ -386,7 +389,7 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, lr_schedule,
 
         scaler.scale(loss).backward()
 
-        if (data_iter + 1) % args.update_freq != 0:
+        if not is_last_accum:
             continue
 
         # compute gradient and do SGD step
